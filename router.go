@@ -11,7 +11,7 @@ type (
 	router struct {
 		// key: http method
 		// value: pattern 별로 실행할 http.HandlerFunc
-		handlers map[string]map[string]http.HandlerFunc
+		handlers map[string]map[string]HandlerFunc
 	}
 )
 
@@ -21,12 +21,12 @@ type (
 // 여기서 핸들러란, 특정 엔드포인트의 요청 시 처리하는 함수를 뜻합니다.
 // 핸들어의 함수 원형은 다음과 같습니다.
 // type HandlerFunc func(ResponseWriter, *Request)
-func (r *router) HandleFunc(method, pattern string, h http.HandlerFunc) {
+func (r *router) HandleFunc(method, pattern string, h HandlerFunc) {
 	// 매개변수 method로 등록된 맵이 있는지 확인
 	m, ok := r.handlers[method]
 	if ok == false {
 		// 등록된 맵이 없으면 생성
-		m = make(map[string]http.HandlerFunc)
+		m = make(map[string]HandlerFunc)
 		r.handlers[method] = m
 	}
 	// 매개변수 method로 등록된 맵에 URL 팬턴과 핸들러 함수 등록
@@ -39,18 +39,50 @@ func (r *router) HandleFunc(method, pattern string, h http.HandlerFunc) {
 func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// request HTTP method에 맞는 모든 handers를 반복하여 요청 URL에 해당하는 handler를 찾음
 	for pattern, handler := range r.handlers[req.Method] {
-		if _, ok := r.match(pattern, req.URL.Path); ok {
-			handler(w, req)
+		if params, ok := match(pattern, req.URL.Path); ok {
+			c := &Context{
+				ResponseWriter: w,
+				Request:        req,
+			}
+
+			for k, v := range params {
+				c.Params[k] = v
+			}
+
+			handler(c)
+			return
 		}
 	}
 
 	// 요청에 알맞지 않았을 경우 아래 코드 실행
+	http.NotFound(w, req)
 	return
+}
+
+// handler라는 함수는 등록된 handlers들을 순회하면서, 들어오 요청, Method, path 값을 가지고 handler를 실행하고, 없으면 404를 반환하는 함수 이빈다.
+func (r *router) handler() HandlerFunc {
+	return func(c *Context) {
+		// request HTTP method에 맞는 모든 handers를 반복하여 요청 URL에 해당하는 handler를 찾음
+		for pattern, handler := range r.handlers[c.Request.Method] {
+			if params, ok := match(pattern, c.Request.URL.Path); ok {
+				for k, v := range params {
+					c.Params[k] = v
+				}
+
+				handler(c)
+				return
+			}
+		}
+
+		// 요청에 알맞지 않았을 경우 아래 코드 실행
+		http.NotFound(c.ResponseWriter, c.Request)
+		return
+	}
 }
 
 // match 함수는 라우터에 등록된 URL과클라이언트가 HTTP 1.1의해 요청한 URL이 일치하는지 확인하여,
 // 참 거짓을 반환하고 path/value값들을 반환합니다.
-func (router) match(pattern, path string) (map[string]string, bool) {
+func match(pattern, path string) (map[string]string, bool) {
 	// pattern > 내가 등록한 URL (ex: /api/posts/:post_id)
 	// path    > client가 요청한 URL (ex: /api/posts/231)
 
